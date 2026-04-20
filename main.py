@@ -1,28 +1,22 @@
 from cmu_graphics import *
-import numpy as np
 import math
 import random
-
-class FluidParticle:
-    def __init__(self, cx, cy, vx, vy, radius, color):
-        self.cx = cx
-        self.cy  = cy
-        self.vx = vx
-        self.vy = vy
-        self.radius = radius
-        self.color = color
-
+from particleClasses import *
+from physics import *
+from SPH import *
 
 def onAppStart(app):
     app.isPaused = False
     app.height, app.width = 1000, 1000
     app.fluidParticles = []
     app.colors = ['blue','red','green','orange','black','purple']
-    for i in range(0,500,10):
-        app.fluidParticles.append(FluidParticle(10 + i, 50, 2, random.random(), 7, random.choice(app.colors)))
-    app.gravity = 0.06
-    app.stepsPerSecond = 200
-    app.coefficientOfRestitution = 0.85 # The amount of energy that a particle loses on a collision
+    resetParticles(app)
+    app.gravity = 0.16 # g/stepsPerSecond
+    app.stepsPerSecond = 60
+    app.coefficientOfRestitution = 0.60 # The amount of energy that a particle loses on a collision with a wall (0 = all energy is lost, 1 = no energy is lost)
+    app.stiffness = 0.017
+    app.restDensity = 4
+    app.viscosity = 0.035
 
 def onStep(app):
     if app.isPaused:
@@ -30,68 +24,83 @@ def onStep(app):
     takeStep(app)
 
 def takeStep(app):
-    for i in range(len(app.fluidParticles)):
-        currFluidParticle = app.fluidParticles[i]
-        currFluidParticle.vy += app.gravity
-        currFluidParticle.cx += currFluidParticle.vx
-        currFluidParticle.cy += currFluidParticle.vy
-        if (currFluidParticle.cy + currFluidParticle.radius >= app.height):
-            currFluidParticle.cy = app.height - currFluidParticle.radius
-            currFluidParticle.vy *= -app.coefficientOfRestitution
-        if (currFluidParticle.cx + currFluidParticle.radius >= app.width):
-            currFluidParticle.cx = app.width - currFluidParticle.radius 
-            currFluidParticle.vx *= -app.coefficientOfRestitution
-        if (currFluidParticle.cx - currFluidParticle.radius <= 0):
-            currFluidParticle.cx = currFluidParticle.radius  
-            currFluidParticle.vx *= -app.coefficientOfRestitution
-        if (currFluidParticle.cy - currFluidParticle.radius <= 0):
-            currFluidParticle.cy = currFluidParticle.radius
-            currFluidParticle.vy *= -app.coefficientOfRestitution
-    resolveCollisions(app)
+    particles = app.fluidParticles
+    positions = np.array([[p.cx, p.cy] for p in particles])
+    tree = KDTree(positions)
+
+    computeDensityPressure(particles, tree, app)
+    computeForces(particles, tree, app)
+
+    for p in particles:
+        p.color = rgb(*densityToColor(p.density, app.restDensity))
+
+    for particle in particles:
+        # applying the forces derived from SPH operators
+        particle.vx += particle.fx
+        particle.vy += particle.fy
+
+        # gravity!
+        particle.vy += app.gravity
+
+    
+        particle.cx += particle.vx
+        particle.cy += particle.vy
+
+        # Bounding Box Code
+        if (particle.cy + particle.radius >= app.height):
+            particle.cy = app.height - particle.radius
+            particle.vy *= -app.coefficientOfRestitution
+        if (particle.cx + particle.radius >= app.width):
+            particle.cx = app.width - particle.radius 
+            particle.vx *= -app.coefficientOfRestitution
+        if (particle.cx - particle.radius <= 0):
+            particle.cx = particle.radius  
+            particle.vx *= -app.coefficientOfRestitution
+        if (particle.cy - particle.radius <= 0):
+            particle.cy = particle.radius
+            particle.vy *= -app.coefficientOfRestitution
+    resolveCollisions(app, tree)
+
+def resetParticles(app):
+    app.fluidParticles = []
+    for i in range(150):
+        app.fluidParticles.append(FluidParticle(10 + i*5, 50, 2, random.random(), 10, 'cyan'))
 
 def onKeyPress(app, key):
     if key == 'p':
         app.isPaused = not app.isPaused
-    if key == 's' and app.isPaused:
-        takeStep(app)
-
+    # Stiffness
+    if key == 'r':
+        resetParticles(app)
+    if key == 'q':
+        app.stiffness *= 1.05
+        print(f'STIFFNESS: {app.stiffness:.4f}')
+    if key == 'a':
+        app.stiffness *= 0.95
+        print(f'STIFFNESS: {app.stiffness:.4f}')
+    # Rest density
+    if key == 'w':
+        app.restDensity *= 1.05
+        print(f'REST_DENSITY: {app.restDensity:.4f}')
+    if key == 's':
+        app.restDensity *= 0.95
+        print(f'REST_DENSITY: {app.restDensity:.4f}')
+    # Viscosity
+    if key == 'e':
+        app.viscosity *= 1.05
+        print(f'VISCOSITY: {app.viscosity:.4f}')
+    if key == 'd':
+        app.viscosity *= 0.95
+        print(f'VISCOSITY: {app.viscosity:.4f}')
 
 def redrawAll(app):
+    drawLabel(f'viscosity {app.viscosity}', app.width/2,app.height/2)
+    drawLabel(f'stiffness {app.stiffness}', app.width/2,app.height/2 + 50)
+    drawLabel(f'density {app.restDensity}', app.width/2,app.height/2 + 100)
     for particle in app.fluidParticles:
         particleCx, particleCy = particle.cx, particle.cy
         drawCircle(particleCx, particleCy, particle.radius, fill=particle.color)
 
-def resolveCollisions(app):
-    particles = app.fluidParticles
-    for i in range(len(particles)):
-        for j in range(i+1, len(particles)):  # i+1 avoids checking pairs twice
-            resolveParticlePairCollision(particles[i], particles[j])
-
-def resolveParticlePairCollision(particle1, particle2):
-    particle1Pos = np.array([particle1.cx, particle1.cy], dtype=float)
-    particle2Pos = np.array([particle2.cx, particle2.cy], dtype=float)
-    particle1Vel = np.array([particle1.vx, particle1.vy], dtype=float)
-    particle2Vel = np.array([particle2.vx, particle2.vy], dtype=float)
-
-    delta = particle2Pos - particle1Pos # A vector that points FROM particle 1 TO particle 2
-    dist = np.linalg.norm(delta)
-    minDist = particle1.radius + particle2.radius
-    if (dist < minDist) and (dist != 0): # They are colliding
-        deltaUnitVector = delta / dist # A unit vector that points from P1 to P2, in particle dynamics, changes in velocities only happen along the line of impact, I.E. this vector
-        overlap = minDist - dist
-        particle1Pos -= (deltaUnitVector * overlap) / 2
-        particle2Pos += (deltaUnitVector * overlap) / 2
-
-        p1DotN = np.dot(particle1Vel, deltaUnitVector) #component of particle's velocity along line of impact
-        p2DotN = np.dot(particle2Vel, deltaUnitVector)
-        particle1Vel += (p2DotN - p1DotN) * deltaUnitVector # The relative difference of their velocities along the ling of impact, essentially swapping their vels along the line of impact
-        particle2Vel += (p1DotN - p2DotN) * deltaUnitVector # We are assuming a perfectly elastic collision where energy is conserved, e = 1
-
-       
-        particle1.cx, particle1.cy = particle1Pos
-        particle1.vx, particle1.vy = particle1Vel
-        particle2.cx, particle2.cy = particle2Pos
-        particle2.vx, particle2.vy = particle2Vel
 
 def main():
     runApp()
