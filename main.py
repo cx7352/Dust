@@ -1,108 +1,140 @@
 from cmu_graphics import *
-import math
-import random
 from particleClasses import *
 from physics import *
 from SPH import *
+from updaterFunctions import *
+import numpy as np
+from drawingFunctions import *
 
 def onAppStart(app):
+
+
+
+    app.background = 'gray'
     app.isPaused = False
-    app.height, app.width = 1000, 1000
+    app.mouseIsActive = False
+    app.mouseX = None
+    app.mouseY = None
+    app.targetPointerX = None
+    app.targetPointerY = None
+    app.windStrength = 10.0
+    app.mouseRadius = 150
+
+
     app.fluidParticles = []
-    app.colors = ['blue','red','green','orange','black','purple']
-    resetParticles(app)
-    app.gravity = 0.16 # g/stepsPerSecond
+    resetParticlesToGrid(app)
+
+    # Physical Constants
+    app.accelDueToGravity = 0.25 # g/stepsPerSecond
+    app.gravityX = 0
+    app.gravityY = app.accelDueToGravity  # default downward
     app.stepsPerSecond = 60
     app.coefficientOfRestitution = 0.60 # The amount of energy that a particle loses on a collision with a wall (0 = all energy is lost, 1 = no energy is lost)
-    app.stiffness = 0.017
-    app.restDensity = 4
-    app.viscosity = 0.035
+
+    # SPH constants
+    app.stiffness = 0.014
+    app.restDensity = 1.0
+    app.viscosity = 0.01
+
+    # arrays of all the particles' important values so we don't have to calculate them every time within helper functions
+    app.densities = np.zeros(len(app.fluidParticles))
+    app.pressures = np.zeros(len(app.fluidParticles))
+    app.velocities = np.array([[particle.vx, particle.vy] for particle in app.fluidParticles])
+
+
+    app.speedGradient = np.array([0.00, 0.07, 0.14, 0.21, 0.28, 0.35,
+                                0.42, 0.50, 0.58, 0.65, 0.72, 0.79,
+                                0.86, 0.93, 1.00])
+    app.speedToColorIndices = np.array([
+        (30,  144, 255),   # dodger blue — at rest
+        (0,   120, 230),   # ocean blue
+        (0,   100, 200),   # deep ocean
+        (0,   80,  180),   # dark ocean
+        (0,   180, 220),   # shallow water
+        (0,   210, 210),   # turquoise
+        (0,   220, 170),   # cyan teal
+        (0,   210, 100),   # teal green
+        (50,  200, 30),    # green
+        (150, 210, 0),     # yellow green
+        (220, 200, 0),     # yellow
+        (255, 150, 0),     # amber
+        (255, 80,  0),     # orange
+        (255, 20,  20),    # red
+        (200, 0,   80),    # deep red — max speed
+    ], dtype=float)
 
 def onStep(app):
-    if app.isPaused:
-        return
-    takeStep(app)
+    if not app.isPaused:
+        takeStep(app)
 
 def takeStep(app):
     particles = app.fluidParticles
-    positions = np.array([[p.cx, p.cy] for p in particles])
-    tree = KDTree(positions)
-
-    computeDensityPressure(particles, tree, app)
-    computeForces(particles, tree, app)
-
-    for p in particles:
-        p.color = rgb(*densityToColor(p.density, app.restDensity))
-
-    for particle in particles:
-        # applying the forces derived from SPH operators
-        particle.vx += particle.fx
-        particle.vy += particle.fy
-
-        # gravity!
-        particle.vy += app.gravity
-
-    
-        particle.cx += particle.vx
-        particle.cy += particle.vy
-
-        # Bounding Box Code
-        if (particle.cy + particle.radius >= app.height):
-            particle.cy = app.height - particle.radius
-            particle.vy *= -app.coefficientOfRestitution
-        if (particle.cx + particle.radius >= app.width):
-            particle.cx = app.width - particle.radius 
-            particle.vx *= -app.coefficientOfRestitution
-        if (particle.cx - particle.radius <= 0):
-            particle.cx = particle.radius  
-            particle.vx *= -app.coefficientOfRestitution
-        if (particle.cy - particle.radius <= 0):
-            particle.cy = particle.radius
-            particle.vy *= -app.coefficientOfRestitution
+    positions = np.array([[p.cx, p.cy] for p in particles]) # a 2D array of all the positions of each fluid particle
+    tree = KDTree(positions)                                # a KD-tree that automatically maps all the positions, allows for dramatically faster searches 
+    computeDensityPressure(particles, positions, tree, app) # Computes the necessary values for all of particles: density and pressure
+    computeForces(particles, positions, tree, app)                     
+    moveParticles(particles, app)
+    applyFanForce(app)
     resolveCollisions(app, tree)
-
-def resetParticles(app):
-    app.fluidParticles = []
-    for i in range(150):
-        app.fluidParticles.append(FluidParticle(10 + i*5, 50, 2, random.random(), 10, 'cyan'))
+    updateParticleColorsFromSpeeds(app)
+    app.velocities = np.array([[particle.vx, particle.vy] for particle in particles]) # update Our velocity list
 
 def onKeyPress(app, key):
+    if key == 'l' and app.isPaused:
+        takeStep(app)
     if key == 'p':
         app.isPaused = not app.isPaused
     # Stiffness
     if key == 'r':
-        resetParticles(app)
+        resetParticlesToGrid(app)
     if key == 'q':
         app.stiffness *= 1.05
-        print(f'STIFFNESS: {app.stiffness:.4f}')
     if key == 'a':
         app.stiffness *= 0.95
-        print(f'STIFFNESS: {app.stiffness:.4f}')
-    # Rest density
     if key == 'w':
         app.restDensity *= 1.05
-        print(f'REST_DENSITY: {app.restDensity:.4f}')
     if key == 's':
         app.restDensity *= 0.95
-        print(f'REST_DENSITY: {app.restDensity:.4f}')
     # Viscosity
     if key == 'e':
         app.viscosity *= 1.05
-        print(f'VISCOSITY: {app.viscosity:.4f}')
     if key == 'd':
         app.viscosity *= 0.95
-        print(f'VISCOSITY: {app.viscosity:.4f}')
+    if key == 'right':
+        app.gravityX = app.accelDueToGravity
+        app.gravityY = 0
+    if key == 'left':
+        app.gravityX = -app.accelDueToGravity
+        app.gravityY = 0
+    if key == 'up':
+        app.gravityX = 0
+        app.gravityY = -app.accelDueToGravity
+    if key == 'down':
+        app.gravityX = 0
+        app.gravityY = app.accelDueToGravity
 
 def redrawAll(app):
     drawLabel(f'viscosity {app.viscosity}', app.width/2,app.height/2)
     drawLabel(f'stiffness {app.stiffness}', app.width/2,app.height/2 + 50)
     drawLabel(f'density {app.restDensity}', app.width/2,app.height/2 + 100)
-    for particle in app.fluidParticles:
-        particleCx, particleCy = particle.cx, particle.cy
-        drawCircle(particleCx, particleCy, particle.radius, fill=particle.color)
+    drawParticles(app)
+    drawTargetPointer(app)
+
+def onMousePress(app, mouseX, mouseY):
+    app.mouseIsActive = True
+
+def onMouseDrag(app, mouseX, mouseY):
+    updateTargetPointer(app, mouseX, mouseY)
+
+def onMouseMove(app, mouseX, mouseY):
+    updateTargetPointer(app, mouseX, mouseY)
+
+
+def onMouseRelease(app, mouseX, mouseY):
+    app.mouseIsActive = False
 
 
 def main():
-    runApp()
+    runApp(width = 1000, height = 1000)
 
 main()

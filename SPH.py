@@ -1,14 +1,7 @@
 import numpy as np
 
-H = 27 # The smoothing radius, particles that are distance greater than this away from a given particle have no influence on said particle
-HSqrd = H**2
-
+H = 30 # The smoothing radius, particles that are distance greater than this away from a given particle have no influence on said particle
 particleMass = 1.0 #Assumed constant for a uniform fluid
-
-# Defining important fluid constant
-restingDensity = 75.0
-fluidStiffness = 0.175
-dynamicViscosity = 0.025
 
 """
 Within Smoothed paticle Hydrodynamics, there is something always used called a 'smoothing kernel,' which essentially, for a given particle, looks at the immediate neighbors of that
@@ -23,85 +16,108 @@ W(r, h)   = (1 - (r/h)²)²          for density
 ∇²W(r, h) = (1 - r/h)              for viscosity 
 """
 
-def W_density(r, h): # this function determines how much a given particle a distance "r" away contributes to a particles local density
-    if r >= h:
-        return 0
-    else:
-        return (1 - (r/h)**2)**2 # this math comes from a research paper, don't really know what is means
+################################################# EXEMPT CODE, ALL MATH DONE BY AI
+
+def W_density(r, h):
+    comparator = r < h
+    result = np.zeros_like(r)
+    result[comparator] = (1 - (r[comparator]/h)**2)**2
+    return result
+
+def W_pressure_gradient(r_vecs, r_mags, h):
+    comparator = (r_mags < h) & (r_mags > 0)
+    result = np.zeros_like(r_vecs)
+    scalar = np.zeros_like(r_mags)
+    scalar[comparator] = -4 * r_mags[comparator] / h**2 * (1 - (r_mags[comparator]/h)**2)
+    result[comparator] = scalar[comparator, None] * (r_vecs[comparator] / r_mags[comparator, None])
+    return result
+
+def W_viscosity_laplacian(r, h):
+    comparator = r < h
+    result = np.zeros_like(r)
+    result[comparator] = 1 - r[comparator]/h
+    return result
+
+#################################################
+
+
+
+def computeDensityPressure(particles, positions, tree, app):
+    pairs = tree.query_pairs(r=H)
+    if len(pairs) == 0:
+        for particle in particles:
+            particle.density = 0.0
+            particle.pressure = 0.0
+        app.densities = np.zeros(len(particles))
+        app.pressures = np.zeros(len(particles))
+        return
     
-def W_pressure_gradient(r_vector, r_magn, h):
-    if r_magn >= h or r_magn == 0:
-        return np.zeros(2)
-    scalar = -4 * r_magn / h**2 * (1 - (r_magn/h)**2)
-    return scalar * (r_vector / r_magn) # returns a unit vector scalaed by the 'scalar' which determines how 'strong' the pressure forces acts along this unit vector
+    pairs = list(pairs) #tree.query returns a set, so we must convert it into a list so that we can index into it, contains tuples of point pairs that are close enough to interact (i, )
+    iIndices, jIndices, r_vecs, r_mags = getijIndicesRVecMags(pairs, positions)
+    
+    # Accumulate density, each pair contributes to both particles
+    densityKernelValues = particleMass * W_density(r_mags, H)
+    
+    # each particle contributes to its density value, do we basically evalute each particle at a distance zero from itself
+    densities = np.zeros(len(particles))
+    np.add.at(densities, iIndices, densityKernelValues)
+    np.add.at(densities, jIndices, densityKernelValues)
+    densities += particleMass * W_density(np.zeros(len(particles)), H)
+    
+    pressures = app.stiffness * (densities - app.restDensity)       #From equation of state P = mu *(rho_curr - rho_rest)
 
-def W_viscosity_laplacian(r, h): # The laplacian is a m
-    if r >= h:
-        return 0.0
-    return (1 - r/h)
+    # Store on app — reused by computeForces
+    app.densities = densities
+    app.pressures = pressures
 
-def densityToColor(density, restDensity):
-    ratio = density / restDensity  # restDensity should be ~4-5 to match actual values
-    if ratio < 0.4:
-        return (135, 206, 235)   # light blue — sparse
-    elif ratio < 0.7:
-        return (30, 144, 255)    # dodger blue
-    elif ratio < 1.0:
-        return (0, 0, 205)       # medium blue — near rest
-    elif ratio < 1.5:
-        return (0, 0, 139)       # dark blue — compressed
-    else:
-        return (255, 255, 255)   # white — very compressed
+    for index, particle in enumerate(particles):
+        particle.density = densities[index]
+        particle.pressure = pressures[index]
+    
+def computeForces(particles, positions, tree, app):
+    velocities = app.velocities
+    densities = app.densities   
+    pressures = app.pressures    
+    
+    pairs = list(tree.query_pairs(r=H))
+    if len(pairs) == 0:
+        for particle in particles:
+            particle.fx = 0.0
+            particle.fy = 0.0
+        return
+    
+    forces = np.zeros((len(particles), 2))
+    iIndices, jIndices, r_vecs, r_mags = getijIndicesRVecMags(pairs, positions)
+    
+    # Pressure Forces
+    avg_pressure = (pressures[iIndices] + pressures[jIndices]) / 2         
+    particleDensity = np.maximum(densities[jIndices], 1e-6)
+    pressure_scalar = -(particleMass * avg_pressure / particleDensity)
+    pressure_grad = W_pressure_gradient(r_vecs, r_mags, H)
+    pressure_force = pressure_scalar[:, None] * pressure_grad
 
-# These next two functions were mainly generated by AI, although I know what they do high level, I wasn't able to obtain these math relationships myself
-def computeDensityPressure(particles, tree, app):
-    """Pass 1: compute density and pressure for every particle"""
-    positions = np.array([[p.cx, p.cy] for p in particles])
+    # Viscous Forces
+    vel_diff = velocities[jIndices] - velocities[iIndices]
+    visc_scalar = app.viscosity * particleMass / particleDensity
+    visc_weight = W_viscosity_laplacian(r_mags, H)
+    viscosity_force = visc_scalar[:, None] * vel_diff * visc_weight[:, None]
 
-    for i, p in enumerate(particles):
-        density = 0.0
-        neighbors = tree.query_ball_point([p.cx, p.cy], H)
-        for j in neighbors:
-            r_vec = positions[i] - positions[j]
-            r = np.linalg.norm(r_vec)
-            density += particleMass * W_density(r, H)
-        p.density = density
-        p.pressure = app.stiffness * (density - app.restDensity)
+    total_force = pressure_force + viscosity_force
+
+    np.add.at(forces, iIndices, total_force)
+    np.add.at(forces, jIndices, -total_force)
+    
+    for index, particle in enumerate(particles):
+        particle.fx = forces[index, 0]
+        particle.fy = forces[index, 1]
 
 
+def getijIndicesRVecMags(pairs, positions):
+    iIndices = np.array([particle[0] for particle in pairs])
+    jIndices = np.array([particle[1] for particle in pairs])
+    
+    r_vecs = positions[iIndices] - positions[jIndices]
+    r_mags = np.linalg.norm(r_vecs, axis=1)
 
-def computeForces(particles, tree, app):
-    """Pass 2: compute pressure + viscosity forces for every particle"""
-    positions = np.array([[p.cx, p.cy] for p in particles])
-
-    for i, p in enumerate(particles):
-        pressureForce = np.zeros(2)
-        viscosityForce = np.zeros(2)
-        neighbors = tree.query_ball_point([p.cx, p.cy], H)
-
-        for j in neighbors:
-            if i == j:
-                continue
-            neighbor = particles[j]
-            r_vec = positions[i] - positions[j]
-            r = np.linalg.norm(r_vec)
-
-            # Pressure force: push apart when dense
-            if neighbor.density > 0:
-                pressureForce += (
-                    -particleMass *
-                    ((p.pressure + neighbor.pressure) / 2) / neighbor.density *
-                    W_pressure_gradient(r_vec, r, H)
-                )
-
-            # Viscosity force: drag toward neighbor velocity
-            vel_diff = np.array([neighbor.vx - p.vx, neighbor.vy - p.vy])
-            if neighbor.density > 0:
-                viscosityForce += (
-                    app.viscosity * particleMass *
-                    vel_diff / neighbor.density *
-                    W_viscosity_laplacian(r, H)
-                )
-
-        p.fx = pressureForce[0] + viscosityForce[0]
-        p.fy = pressureForce[1] + viscosityForce[1]
+    return iIndices, jIndices, r_vecs, r_mags  # Given pairs of points and their positions, returns two arrays containing each half of the particle pair (i, j)
+        
