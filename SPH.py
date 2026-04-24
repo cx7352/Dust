@@ -5,7 +5,7 @@ particleMass = 1.0 #Assumed constant for a uniform fluid
 
 """
 Within Smoothed paticle Hydrodynamics, there is something always used called a 'smoothing kernel,' which essentially, for a given particle, looks at the immediate neighbors of that
-particles an obtains values for those particles contributions to 3 main things, density, pressure, and viscosity. I'll admit, the math for this is pretty difficult and I don't fully
+particle and obtains values for those particles' contributions to 3 main things, density, pressure, and viscosity. I'll admit, the math for this is pretty difficult and I don't fully
 understand it, but the smoothing kernal looks something like: ρᵢ = Σ m · W(|rᵢ - rⱼ|, h)
 What this is basically saying is that function "w" takes in the distance between the two particles and a user-defined smoothing radius 'h' and returns the three values previously mentioned
 of density, pressure, and viscosity all weighted by the particles separation distance.
@@ -40,8 +40,6 @@ def W_viscosity_laplacian(r, h):
 
 #################################################
 
-
-
 def computeDensityPressure(particles, positions, tree, app):
     pairs = tree.query_pairs(r=H)
     if len(pairs) == 0:
@@ -52,21 +50,20 @@ def computeDensityPressure(particles, positions, tree, app):
         app.pressures = np.zeros(len(particles))
         return
     
-    pairs = list(pairs) #tree.query returns a set, so we must convert it into a list so that we can index into it, contains tuples of point pairs that are close enough to interact (i, )
+    pairs = list(pairs) # tree.query returns a set, so we must convert it into a list so that we can index into it, contains tuples of point pairs that are close enough to interact (i, j)
     iIndices, jIndices, r_vecs, r_mags = getijIndicesRVecMags(pairs, positions)
     
     # Accumulate density, each pair contributes to both particles
     densityKernelValues = particleMass * W_density(r_mags, H)
     
-    # each particle contributes to its density value, do we basically evalute each particle at a distance zero from itself
+    # each particle contributes to its density value, we basically evalute each particle at a distance zero from itself
     densities = np.zeros(len(particles))
     np.add.at(densities, iIndices, densityKernelValues)
     np.add.at(densities, jIndices, densityKernelValues)
     densities += particleMass * W_density(np.zeros(len(particles)), H)
-    
     pressures = app.stiffness * (densities - app.restDensity)       #From equation of state P = mu *(rho_curr - rho_rest)
 
-    # Store on app — reused by computeForces
+    # Store on app so that computeForces can access them
     app.densities = densities
     app.pressures = pressures
 
@@ -110,7 +107,6 @@ def computeForces(particles, positions, tree, app):
     for index, particle in enumerate(particles):
         particle.fx = forces[index, 0]
         particle.fy = forces[index, 1]
-
 
 def getijIndicesRVecMags(pairs, positions):
     iIndices = np.array([particle[0] for particle in pairs])

@@ -1,9 +1,8 @@
 import numpy as np
-from particleClasses import *
+from classes import *
 import random
-from cmu_graphics import rgb
+from cmu_graphics import drawCircle, rgb
 import math
-
 
 ################################################# EXEMPT CODE, LINEAR COLOR INTERPOLATION DONE BY AI
 
@@ -20,8 +19,22 @@ def updateParticleColorsFromSpeeds(app):
 
 #################################################
 
+def applyTuning(app, key):
+    if key == 'q':
+        app.stiffness = min(app.stiffness * 1.05, 200)
+    if key == 'a':
+        app.stiffness = max(app.stiffness * 0.95, 0.0001)
+    if key == 'w':
+        app.restDensity = min(app.restDensity * 1.05, 10000)
+    if key == 's':
+        app.restDensity = max(app.restDensity * 0.95, 0.0001)
+    if key == 'e':
+        app.viscosity = min(app.viscosity * 1.05, 2)
+    if key == 'd':
+        app.viscosity = max(app.viscosity * 0.95, 0.005)
+
 def updateTargetPointer(app, mouseX, mouseY):
-    targetPointerLength = 40
+    targetPointerLength = 60
     if (app.mouseX != None) and (app.mouseY != None):
             prevMouseXY = np.array([app.mouseX, app.mouseY])
             app.mouseX, app.mouseY = mouseX, mouseY
@@ -37,26 +50,10 @@ def updateTargetPointer(app, mouseX, mouseY):
     else:
             app.mouseX, app.mouseY = mouseX, mouseY
 
-def resetParticlesToGrid(app):
-    app.fluidParticles = []
-    spaceBetweenParticles = 20
-    rows, cols = 20, 20
-    startX = (app.width - cols * spaceBetweenParticles) / 2
-    startY = 100
-    for row in range(rows):
-        for col in range(cols):
-            x = startX + col * spaceBetweenParticles
-            y = startY + row * spaceBetweenParticles
-            app.fluidParticles.append(FluidParticle(
-                x, y,
-                random.uniform(-0.5, 0.5),
-                random.uniform(0, 0.5),
-                6,
-                rgb(30, 100, 255)
-            ))
-    app.densities = np.zeros(len(app.fluidParticles))
-    app.pressures = np.zeros(len(app.fluidParticles))
-    app.velocities = np.array([[particle.vx, particle.vy] for particle in app.fluidParticles])
+def updateMouseDot(app, mouseX, mouseY):
+    app.mouseX = mouseX
+    app.mouseY = mouseY
+
 
 def moveParticles(particles, app):
     for particle in particles:
@@ -86,5 +83,49 @@ def moveParticles(particles, app):
             particle.cy = particle.radius
             particle.vy *= -app.coefficientOfRestitution
 
+def spawnFluidAtMouse(app):
+    if ((app.mouseX == None) or
+        (app.mouseY == None) or (len(app.fluidParticles) >= 400) or
+        (not app.mouseIsActive)):
+        if not app.unlockedFlowParticles or not app.mouseIsActive:
+            return
+    
+    particlesSpawnedPerStep = 2
+    fluidParticleRadius = 9
+
+    for _ in range(particlesSpawnedPerStep):
+        x = app.mouseX + random.uniform(-15, 15)
+        y = app.mouseY + random.uniform(-15, 15)
+        app.fluidParticles.append(FluidParticle(
+            x, y,
+            random.uniform(-0.5, 0.5),
+            random.uniform(-0.5, 0.5),
+            fluidParticleRadius,
+            rgb(30, 144, 255) # particle with no velocity, gets updated immediately after spawning
+        ))
+
+    # update our numpy aarrays
+    app.densities  = np.zeros(len(app.fluidParticles))
+    app.pressures  = np.zeros(len(app.fluidParticles))
+    app.velocities = np.array([[particle.vx, particle.vy] for particle in app.fluidParticles])
+
+def updateTitleParticles(app):
+     # spawn new particles
+    app.titleParticleSpawnTimer += 1
+    if app.titleParticleSpawnTimer >= app.titleParticleSpawnRate:
+        app.titleParticleSpawnTimer = 0
+        for _ in range(3):
+            x = random.randint(0, app.width)
+            app.titleParticles.append(TitleParticle(x, -20))
+
+    # update positions
+    for particle in app.titleParticles:
+        particle.vy += app.titleParticleGravity
+        particle.x += particle.vx
+        particle.y += particle.vy
+        particle.speed = math.sqrt(particle.vx**2 + particle.vy**2)
+
+    # remove particles that fall off bottom
+    app.titleParticles = [particle for particle in app.titleParticles if particle.y < app.height]
 
 
