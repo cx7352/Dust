@@ -28,6 +28,10 @@ from creditScreen import *
 from tutorialScreen import *
 
 def onAppStart(app):
+    url = 'https://od.lk/s/NjhfMTY0NDczNjM2Xw/Intense%20and%20Upbeat%20Electronic%20Trailer%20Music%20-%20Black%20Heat%20%28Copyright%20and%20Royalty%20Free%29.mp3'
+    app.bgMusic = Sound(url)
+    app.bgMusic.play(restart = True, loop=True)
+    
     app.startButtons = [
         Button(app.width/2, app.height/2 - 10,  250, 55, 'Begin Flow', 'start',   'monospace', keepCenterAligned=True),
         Button(app.width/2, app.height/2 + 60, 250, 55, 'Before You Flow', 'tutorial', 'monospace', keepCenterAligned=True),
@@ -134,11 +138,15 @@ def game_onKeyPress(app, key):
         app.fanMode = app.obstacleMode = False
         app.targetPointerX = None
         app.targetPointerY = None
+        app.obstacleStart = None  
+        app.obstaclePreview = None
     if key == '2':
         app.fanMode = True
         app.spawnFluidMode = app.obstacleMode = False
         app.targetPointerX = None
         app.targetPointerY = None
+        app.obstacleStart = None  
+        app.obstaclePreview = None
     if key == '3':
         app.obstacleMode = True
         app.spawnFluidMode = app.fanMode = False
@@ -149,6 +157,8 @@ def game_onKeyPress(app, key):
         app.obstacleMode = False
         app.targetPointerX = None
         app.targetPointerY = None
+        app.obstacleStart = None  
+        app.obstaclePreview = None
     if key == 'p':
         app.isPaused = not app.isPaused
     if key == 'right':
@@ -218,6 +228,7 @@ def game_onMousePress(app, mouseX, mouseY):
 
 def game_onMouseDrag(app, mouseX, mouseY):
     if app.obstacleMode and app.obstacleStart is not None:
+        updateMouseDot(app, mouseX, mouseY)
         app.obstaclePreview = (app.obstacleStart[0], app.obstacleStart[1], mouseX, mouseY)
         return
     
@@ -243,6 +254,7 @@ def game_onMouseRelease(app, mouseX, mouseY):
             app.obstacles.append(RectObstacle(x1, y1, mouseX, mouseY))
         app.obstacleStart = None
         app.obstaclePreview = None
+        updateMouseDot(app, mouseX, mouseY)
         return
     app.mouseX, app.mouseY = mouseX, mouseY
     app.mouseIsActive = False
